@@ -1,4 +1,4 @@
-version: '1.0'
+version: '3.3'
 
 ######################################################
 # COMMONS
@@ -22,7 +22,7 @@ x-minio-common: &minio-common
 
 x-sparkworker-common: &sparkworker-common
   restart: always
-  build: ./spark
+  build: ./docker/spark
   volumes:
     - ./data/spark/work/:/opt/bitnami/spark/work/
     - ./data/spark/logs/:/opt/bitnami/spark/history/
@@ -219,7 +219,7 @@ services:
 ######################################################
   spark-master:
     restart: always
-    build: ./spark
+    build: ./docker/spark
     ports:
       - "4040:8080"
       - "8990:8990"
@@ -276,7 +276,7 @@ services:
       all-net:
 
   spark-livy:
-    build: ./livy
+    build: ./docker/livy
     container_name: spark-livy
 
     command: ["sh", "-c", "/opt/bitnami/livy/bin/livy-server"]
