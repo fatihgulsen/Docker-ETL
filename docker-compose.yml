@@ -1,0 +1,455 @@
+version: '1.0'
+
+######################################################
+# COMMONS
+######################################################
+
+x-minio-common: &minio-common
+  image: docker.io/bitnami/minio:2023
+  restart: always
+  environment:
+    - MINIO_ROOT_USER=minio
+    - MINIO_ROOT_PASSWORD=miniosecret
+    - MINIO_DISTRIBUTED_MODE_ENABLED=yes
+    - MINIO_DISTRIBUTED_NODES=minio,minio2,minio3,minio4
+  healthcheck:
+    test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
+    interval: 30s
+    timeout: 20s
+    retries: 3
+  depends_on: 
+    - openldap
+
+x-sparkworker-common: &sparkworker-common
+  restart: always
+  build: ./spark
+  volumes:
+    - ./data/spark/work/:/opt/bitnami/spark/work/
+    - ./data/spark/logs/:/opt/bitnami/spark/history/
+    - ./data/spark/scripts/:/opt/bitnami/spark/scripts/
+    - ./spark/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf
+    - type: bind
+      source: ./spark/log4j.properties
+      target: /opt/bitnami/spark/conf/log4j.properties
+  depends_on:
+    - spark-master
+  environment:
+    - SPARK_MODE=worker
+    - SPARK_MASTER="spark://spark-master:7077"
+    - SPARK_WORKLOAD=worker
+    - SPARK_RPC_AUTHENTICATION_ENABLED=no
+    - SPARK_RPC_ENCRYPTION_ENABLED=no
+    - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+    - SPARK_SSL_ENABLED=no
+    - SPARK_USER=spark   
+
+services:
+######################################################
+# DATABASE SERVICE
+######################################################
+  mssql:
+    restart: always
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: mssql
+    networks:
+      all-net:
+        ipv4_address: 10.5.0.100
+    ports:
+      - 1401:1433
+    volumes:
+      - ./data/mssql/data/:/var/opt/mssql/data
+      - ./data/mssql/log/:/var/opt/mssql/log
+      - ./data/mssql/secrets/:/var/opt/mssql/secrets
+      - ./data/mssql/backup/:/var/opt/mssql/backup
+    environment:
+      - ACCEPT_EULA=Y
+      - MSSQL_SA_PASSWORD="TradeAtlas*"
+
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    restart: always
+    ports:
+      - 5401:5432
+    networks:
+      all-net:
+        ipv4_address: 10.5.0.101
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init_postgres_database.sql:/docker-entrypoint-initdb.d/init_database.sql
+    logging:
+      driver: "json-file"
+      options:
+          max-file: "5"
+          max-size: "10m"
+    healthcheck:
+      test: [ "CMD", "pg_isready", "-q", "-d", "airflow_db", "-U", "airflow" ]
+      timeout: 45s
+      interval: 10s
+      retries: 10
+      
+  redis:
+    image: docker.io/bitnami/redis:latest
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/bitnami/redis
+    environment:
+      - ALLOW_EMPTY_PASSWORD=yes
+    networks:
+      all-net:
+        ipv4_address: 10.5.0.102
+
+######################################################
+# LDAP SERVICE
+######################################################
+  openldap:
+    image: docker.io/bitnami/openldap:2.6
+    container_name: openldap
+    ports:
+      - 389:389
+      - 636:636
+    environment:
+      - LDAP_ROOT=dc=tradeatlas,dc=com
+      - LDAP_PORT_NUMBER=389
+      - LDAP_LDAPS_PORT_NUMBER=636
+      - LDAP_ORGANISATION=tradeatlas
+      - LDAP_DOMAIN=tradeatlas.com
+      - LDAP_ADMIN_DN=cn=admin,dc=tradeatlas,dc=com
+      - LDAP_ADMIN_USERNAME=admin
+      - LDAP_ADMIN_PASSWORD=admin
+      - LDAP_CONFIG_USERNAME=admin
+      - LDAP_CONFIG_PASSWORD=admin
+      - LDAP_REMOVE_CONFIG_AFTER_SETUP=true
+      - LDAP_TLS_VERIFY_CLIENT=never
+    volumes:
+      - 'openldap_data:/bitnami/openldap'
+    networks:
+      all-net:
+        ipv4_address: 10.5.0.103
+
+  phpldapadmin:
+    image: osixia/phpldapadmin
+    container_name: phpldapadmin
+    hostname: phpldapadmin
+    ports:
+      - 18080:80
+    environment:
+      - PHPLDAPADMIN_LDAP_HOSTS=10.5.0.103
+      - PHPLDAPADMIN_HTTPS=false
+    depends_on: 
+      - openldap
+    networks:
+      - all-net
+
+######################################################
+# MINIO SERVICE
+######################################################
+  minio:
+    <<: *minio-common
+    container_name: minio
+    ports:
+      - 9000:9000
+      - 9001:9001
+    volumes:
+      - 'minio_data:/bitnami/minio/data'
+    networks:
+      all-net:
+        ipv4_address: 10.5.0.104
+
+  minio2:
+    <<: *minio-common
+    container_name: minio2
+    volumes:
+      - 'minio_2_data:/bitnami/minio/data'
+    networks:
+      all-net: 
+
+  minio3:
+    <<: *minio-common
+    container_name: minio3
+    volumes:
+      - 'minio_3_data:/bitnami/minio/data'
+    networks:
+      all-net:
+
+  minio4:
+    <<: *minio-common
+    container_name: minio4
+    volumes:
+      - 'minio_4_data:/bitnami/minio/data'
+    networks:
+      all-net:
+
+  minio-client:
+    image: docker.io/bitnami/minio-client:2023
+    user: root
+    depends_on:
+      - minio
+      - minio2
+      - minio3
+      - minio4
+    container_name: minio-client
+    networks:
+      all-net:
+    environment:
+      - MINIO_SERVER_HOST="minio"
+      - MINIO_SERVER_ACCESS_KEY="minio"
+      - MINIO_SERVER_SECRET_KEY="miniosecret"
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set minio http://10.5.0.104:9000 minio miniosecret;  
+      # mc admin policy attach
+      mc mb minio/spark-logs;
+      mc mb minio/tmp;
+      mc mb minio/airflow-logs;
+      mc admin user add minio airflow airflow_secret;
+      echo 'Added user airflow.';
+      mc admin policy set minio readwrite user=airflow;
+      # mc event add minio/events arn:minio:sqs::1:postgresql --event "put,delete"
+      exit 0;
+      "
+
+######################################################
+# SPARK SERVICE
+######################################################
+  spark-master:
+    restart: always
+    build: ./spark
+    ports:
+      - "4040:8080"
+      - "8990:8990"
+      - "7077:7077"
+    container_name: spark-master
+    expose:
+      - "4045-4099"
+    environment:
+      - SPARK_MODE=master
+      - SPARK_LOCAL_IP=spark-master
+      - SPARK_WORKLOAD=master
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+      - SPARK_USER=spark
+      - AWS_ACCESS_KEY_ID=minio
+      - AWS_SECRET_ACCESS_KEY=miniosecret
+    networks:
+      all-net:
+    volumes:
+      - ./data/spark/work/:/opt/bitnami/spark/work/
+      - ./data/spark/logs/:/opt/bitnami/spark/history/
+      - ./data/spark/scripts/:/opt/bitnami/spark/scripts
+      - ./spark/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf
+      - type: bind
+        source: ./spark/log4j.properties
+        target: /opt/bitnami/spark/conf/log4j.properties
+    depends_on:
+      - minio-client
+
+  spark-worker-1:
+    <<: *sparkworker-common
+    container_name: spark-worker-1
+    networks:
+      all-net:
+
+  spark-worker-2:
+    <<: *sparkworker-common
+    container_name: spark-worker-2
+    networks:
+      all-net:
+
+  spark-worker-3:
+    <<: *sparkworker-common
+    container_name: spark-worker-3
+    networks:
+      all-net:
+
+  spark-worker-4:
+    <<: *sparkworker-common
+    container_name: spark-worker-4
+    networks:
+      all-net:
+
+  spark-livy:
+    build: ./livy
+    container_name: spark-livy
+
+    command: ["sh", "-c", "/opt/bitnami/livy/bin/livy-server"]
+    volumes:
+      - type: bind
+        source: ./livy/conf/
+        target: /opt/bitnami/livy/conf/
+      - type: bind
+        source: ./livy/target/
+        target: /target/
+      - type: bind
+        source: ./livy/data/
+        target: /data/
+    ports:
+      - '8998:8998'
+    networks:
+      all-net:
+    depends_on:
+      - spark-master
+      - spark-worker-1
+      - spark-worker-2
+      - spark-worker-3
+      - spark-worker-4
+
+######################################################
+# AIRFLOW SERVICE
+######################################################
+  airflow-scheduler:
+    image: docker.io/bitnami/airflow-scheduler:2
+    # build: ./airflow/scheduler
+    container_name: airflow-scheduler
+    environment:
+      - AIRFLOW_FERNET_KEY=46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLbfzqDDho=
+      - AIRFLOW_SECRET_KEY=a25mQ1FHTUh3MnFRSk5KMEIyVVU2YmN0VGRyYTVXY08=
+      - AIRFLOW_DATABASE_HOST=postgres
+      - AIRFLOW_DATABASE_NAME=airflow
+      - AIRFLOW_DATABASE_USERNAME=airflow
+      - AIRFLOW_DATABASE_PASSWORD=airflow
+      - AIRFLOW_EXECUTOR=CeleryExecutor
+      - AIRFLOW_WEBSERVER_HOST=airflow
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@10.5.0.101:5432/airflow
+      - AIRFLOW__DATABASE__LOAD_DEFAULT_CONNECTIONS=False
+      - AIRFLOW__WEBSERVER__EXPOSE_CONFIG=True
+      - REDIS_HOST=redis
+      - AIRFLOW__LOGGING__REMOTE_LOGGING=True
+      - AIRFLOW__LOGGING__REMOTE_BASE_LOG_FOLDER=s3://airflow-logs
+      - AIRFLOW__LOGGING__REMOTE_LOG_CONN_ID=my_s3_conn
+      - AIRFLOW__LOGGING__ENCRYPT_S3_LOGS=False
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__SECRETS__USE_CACHE=true
+
+    networks:
+      all-net:
+    volumes:
+      - ./data/airflow/dags:/opt/bitnami/airflow/dags
+      - ./data/airflow//logs:/opt/bitnami/airflow/logs
+      - ./data/airflow//plugins:/opt/bitnami/airflow/plugins
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - openldap
+      - minio
+
+  airflow-worker:
+    image: docker.io/bitnami/airflow-worker:2
+    # build: ./airflow/worker
+    container_name: airflow-worker
+    environment:
+      - AIRFLOW_FERNET_KEY=46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLbfzqDDho=
+      - AIRFLOW_SECRET_KEY=a25mQ1FHTUh3MnFRSk5KMEIyVVU2YmN0VGRyYTVXY08=
+      - AIRFLOW_EXECUTOR=CeleryExecutor
+      - AIRFLOW_DATABASE_HOST=postgres
+      - AIRFLOW_DATABASE_NAME=airflow
+      - AIRFLOW_DATABASE_USERNAME=airflow
+      - AIRFLOW_DATABASE_PASSWORD=airflow
+      - AIRFLOW_WEBSERVER_HOST=airflow
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@10.5.0.101:5432/airflow
+      - AIRFLOW__DATABASE__LOAD_DEFAULT_CONNECTIONS=False
+      - AIRFLOW__WEBSERVER__EXPOSE_CONFIG=True
+      - REDIS_HOST=redis
+      - AIRFLOW__LOGGING__REMOTE_LOGGING=True
+      - AIRFLOW__LOGGING__REMOTE_BASE_LOG_FOLDER=s3://airflow-logs
+      - AIRFLOW__LOGGING__REMOTE_LOG_CONN_ID=my_s3_conn
+      - AIRFLOW__LOGGING__ENCRYPT_S3_LOGS=False
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__SECRETS__USE_CACHE=true
+
+    networks:
+      all-net:
+    volumes:
+      - ./data/airflow/dags:/opt/bitnami/airflow/dags
+      - ./data/airflow/logs:/opt/bitnami/airflow/logs
+      - ./data/airflow/plugins:/opt/bitnami/airflow/plugins
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - openldap
+      - minio
+
+  airflow:
+    image: docker.io/bitnami/airflow:2
+    # build: ./airflow/main
+    container_name: airflow
+    environment:
+      # - AIRFLOW_LDAP_ENABLE=yes
+      # - AIRFLOW_LDAP_URI=ldap://10.5.0.103:389
+      # - AIRFLOW_LDAP_SEARCH=dc=example,dc=org
+      # - AIRFLOW_LDAP_BIND_USER=cn=admin,dc=example,dc=org
+      # - AIRFLOW_LDAP_BIND_PASSWORD=admin
+      # - AIRFLOW_LDAP_UID_FIELD=uid
+      # - AIRFLOW_LDAP_USE_TLS=False
+      # - AIRFLOW_LDAP_ROLES_MAPPING="{ 'cn=All,ou=Groups,dc=example,dc=org':['User'], 'cn=Admin,ou=Groups,dc=example,dc=org':['Admin'], }"
+      # - AIRFLOW_LDAP_USER_REGISTRATION_ROLE=Admin
+      - AIRFLOW_FERNET_KEY=46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLbfzqDDho=
+      - AIRFLOW_SECRET_KEY=a25mQ1FHTUh3MnFRSk5KMEIyVVU2YmN0VGRyYTVXY08=
+      - AIRFLOW_DATABASE_HOST=postgres
+      - AIRFLOW_DATABASE_NAME=airflow
+      - AIRFLOW_DATABASE_USERNAME=airflow
+      - AIRFLOW_DATABASE_PASSWORD=airflow
+      - AIRFLOW_PASSWORD=airflow
+      - AIRFLOW_USERNAME=airflow
+      - AIRFLOW_EMAIL=user@example.com
+      - AIRFLOW_EXECUTOR=CeleryExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@10.5.0.101:5432/airflow
+      - AIRFLOW__DATABASE__LOAD_DEFAULT_CONNECTIONS=False
+      - AIRFLOW__WEBSERVER__EXPOSE_CONFIG=True
+      - REDIS_HOST=redis
+      - AIRFLOW__LOGGING__REMOTE_LOGGING=True
+      - AIRFLOW__LOGGING__REMOTE_BASE_LOG_FOLDER=s3://airflow-logs
+      - AIRFLOW__LOGGING__REMOTE_LOG_CONN_ID=my_s3_conn
+      - AIRFLOW__LOGGING__ENCRYPT_S3_LOGS=False
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__SECRETS__USE_CACHE=true
+    networks:
+      all-net:
+    ports:
+      - '8080:8080'
+    volumes:
+      - ./data/airflow/dags:/opt/bitnami/airflow/dags
+      - ./data/airflow//logs:/opt/bitnami/airflow/logs
+      - ./data/airflow//plugins:/opt/bitnami/airflow/plugins
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - openldap
+      - minio
+
+
+######################################################
+# NETWORKS
+######################################################
+networks:
+  all-net:
+    ipam:
+      config:
+        - subnet: 10.5.0.0/16
+          gateway: "10.5.0.1"
+    driver: bridge
+
+######################################################
+# VOLUMES
+######################################################
+volumes:
+  minio_data:
+    driver: local
+  minio_2_data:
+    driver: local
+  minio_3_data:
+    driver: local
+  minio_4_data:
+    driver: local
+  openldap_data:
+    driver: local
+  redis_data:
+    driver: local
+  spark_backup_data:
+    driver: local
+  postgres_data:
+    driver: local
