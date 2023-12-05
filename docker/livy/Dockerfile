@@ -1,4 +1,4 @@
-FROM bitnami/spark:3.5
+FROM bitnami/spark:3.4.2
 
 USER root
 ENV LIVY_HOME /opt/bitnami/livy
