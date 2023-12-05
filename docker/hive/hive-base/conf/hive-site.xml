@@ -26,11 +26,11 @@
     </property>
     <property>
         <name>javax.jdo.option.ConnectionUserName</name>
-        <value>hive</value>
+        <value>postgres</value>
     </property>
     <property>
         <name>javax.jdo.option.ConnectionPassword</name>
-        <value>hive</value>
+        <value>postgres</value>
     </property>
     <property>
         <name>datanucleus.autoCreateSchema</name>
@@ -46,7 +46,7 @@
     </property>
     <property>
         <name>hive.metastore.uris</name>
-        <value>thrift://hive-metastore:9083</value>
+        <value>thrift://10.5.0.105:9083</value>
     </property>
     <property>
         <name>hive.metastore.event.db.notification.api.auth</name>

@@ -19,6 +19,8 @@ RUN apt-get install -yqq \
     apt-get --purge remove -yqq wget && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+    # wget -O ${HIVE_HOME}/lib/postgresql-jdbc.jar https://jdbc.postgresql.org/download/postgresql-42.3.5.jar && \
+    # wget -O ${HIVE_HOME}/lib/postgresql-jdbc.jar https://jdbc.postgresql.org/download/postgresql-42.7.0.jar && \
 
 # Spark should be compiled with Hive to be able to use it
 # hive-site.xml should be copied to $SPARK_HOME/conf folder

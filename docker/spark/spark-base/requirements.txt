@@ -14,7 +14,7 @@ configparser
 Jinja2
 Werkzeug
 markupsafe
-pyspark
+pyspark==3.4.2
 boto3
 delta-spark
 findspark

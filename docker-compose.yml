@@ -52,41 +52,40 @@ services:
     image: mcr.microsoft.com/mssql/server:2022-latest
     container_name: mssql
     networks:
-      all-net:
+      etl-net:
         ipv4_address: 10.5.0.100
     ports:
       - 1401:1433
     volumes:
-      - ./data/mssql/data/:/var/opt/mssql/data
-      - ./data/mssql/log/:/var/opt/mssql/log
-      - ./data/mssql/secrets/:/var/opt/mssql/secrets
-      - ./data/mssql/backup/:/var/opt/mssql/backup
+      - ./mnt/mssql/data/:/var/opt/mssql/data
+      - ./mnt/mssql/log/:/var/opt/mssql/log
+      - ./mnt/mssql/secrets/:/var/opt/mssql/secrets
+      - ./mnt/mssql/backup/:/var/opt/mssql/backup
     environment:
       - ACCEPT_EULA=Y
       - MSSQL_SA_PASSWORD="TradeAtlas*"
 
   postgres:
-    image: postgres:16
+    build: './docker/postgres'
     container_name: postgres
     restart: always
     ports:
       - 5401:5432
     networks:
-      all-net:
+      etl-net:
         ipv4_address: 10.5.0.101
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init_postgres_database.sql:/docker-entrypoint-initdb.d/init_database.sql
     logging:
       driver: "json-file"
       options:
           max-file: "5"
           max-size: "10m"
     healthcheck:
-      test: [ "CMD", "pg_isready", "-q", "-d", "airflow_db", "-U", "airflow" ]
+      test: [ "CMD", "pg_isready", "-q", "-d", "postgres", "-U", "postgres" ]
       timeout: 45s
       interval: 10s
       retries: 10
@@ -101,7 +100,7 @@ services:
     environment:
       - ALLOW_EMPTY_PASSWORD=yes
     networks:
-      all-net:
+      etl-net:
         ipv4_address: 10.5.0.102
 
 ######################################################
@@ -129,7 +128,7 @@ services:
     volumes:
       - 'openldap_data:/bitnami/openldap'
     networks:
-      all-net:
+      etl-net:
         ipv4_address: 10.5.0.103
 
   phpldapadmin:
@@ -144,7 +143,7 @@ services:
     depends_on: 
       - openldap
     networks:
-      - all-net
+      - etl-net
 
 ######################################################
 # MINIO SERVICE
@@ -158,7 +157,7 @@ services:
     volumes:
       - 'minio_data:/bitnami/minio/data'
     networks:
-      all-net:
+      etl-net:
         ipv4_address: 10.5.0.104
 
   minio2:
@@ -167,7 +166,7 @@ services:
     volumes:
       - 'minio_2_data:/bitnami/minio/data'
     networks:
-      all-net: 
+      etl-net: 
 
   minio3:
     <<: *minio-common
@@ -175,7 +174,7 @@ services:
     volumes:
       - 'minio_3_data:/bitnami/minio/data'
     networks:
-      all-net:
+      etl-net:
 
   minio4:
     <<: *minio-common
@@ -183,7 +182,7 @@ services:
     volumes:
       - 'minio_4_data:/bitnami/minio/data'
     networks:
-      all-net:
+      etl-net:
 
   minio-client:
     image: docker.io/bitnami/minio-client:2023
@@ -195,105 +194,315 @@ services:
       - minio4
     container_name: minio-client
     networks:
-      all-net:
+      etl-net:
     environment:
       - MINIO_SERVER_HOST="minio"
       - MINIO_SERVER_ACCESS_KEY="minio"
       - MINIO_SERVER_SECRET_KEY="miniosecret"
     entrypoint: >
       /bin/sh -c "
-      mc alias set minio http://10.5.0.104:9000 minio miniosecret;  
-      # mc admin policy attach
+      mc alias set minio http://minio:9000 minio miniosecret;
       mc mb minio/spark-logs;
       mc mb minio/tmp;
       mc mb minio/airflow-logs;
       mc admin user add minio airflow airflow_secret;
       echo 'Added user airflow.';
       mc admin policy set minio readwrite user=airflow;
-      # mc event add minio/events arn:minio:sqs::1:postgresql --event "put,delete"
       exit 0;
       "
+
+######################################################
+# HADOOP SERVICES
+######################################################
+  namenode:
+    build: ./docker/hadoop/hadoop-namenode
+    restart: always
+    container_name: namenode
+    logging:
+      driver: "json-file"
+      options:
+          max-file: "5"
+          max-size: "10m"
+    ports:
+      - "9870:9870"
+    volumes:
+      - ./mnt/hadoop/namenode:/hadoop/dfs/name
+    networks:
+      - etl-net
+    environment:
+      - CLUSTER_NAME=hadoop_cluster
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "namenode", "9870" ]
+      timeout: 45s
+      interval: 10s
+      retries: 10
+
+  datanode:
+    build: ./docker/hadoop/hadoop-datanode
+    restart: always
+    container_name: datanode
+    logging:
+      driver: "json-file"
+      options:
+          max-file: "5"
+          max-size: "10m"
+    depends_on:
+      - namenode
+    volumes:
+      - ./mnt/hadoop/datanode:/hadoop/dfs/data
+    networks:
+      - etl-net
+    environment:
+      - SERVICE_PRECONDITION=namenode:9870
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "datanode", "9864" ]
+      timeout: 45s
+      interval: 10s
+      retries: 10
+
+  hive-metastore:
+    build: ./docker/hive/hive-metastore
+    restart: always
+    container_name: hive-metastore
+    logging:
+      driver: "json-file"
+      options:
+          max-file: "5"
+          max-size: "10m"
+    depends_on:
+      - namenode
+      - datanode
+      - postgres
+    networks:
+      etl-net:
+        ipv4_address: 10.5.0.105
+    environment:
+      - SERVICE_PRECONDITION=namenode:9870 datanode:9864 postgres:5432
+    ports:
+      - "9083:9083"
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "hive-metastore", "9083" ]
+      timeout: 45s
+      interval: 10s
+      retries: 10
+
+  hive-server:
+    build: ./docker/hive/hive-server
+    restart: always
+    container_name: hive-server
+    logging:
+      driver: "json-file"
+      options:
+          max-file: "5"
+          max-size: "10m"
+    depends_on:
+      - hive-metastore
+    networks:
+      etl-net:
+        ipv4_address: 10.5.0.106
+    environment:
+      - SERVICE_PRECONDITION=10.5.0.105:9083
+    ports:
+      - "10000:10000"
+      - "10002:10002"
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "hive-server", "10002" ]
+      timeout: 45s
+      interval: 10s
+      retries: 10
+
+  hive-webhcat:
+    build: ./docker/hive/hive-webhcat
+    restart: always
+    container_name: hive-webhcat
+    logging:
+      driver: "json-file"
+      options:
+          max-file: "5"
+          max-size: "10m"
+    depends_on:
+      - hive-server
+    networks:
+      - etl-net
+    environment:
+      - SERVICE_PRECONDITION=10.5.0.106:10000
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "hive-webhcat", "50111" ]
+      timeout: 45s
+      interval: 10s
+      retries: 10
+
+  hue:
+    build: ./docker/hue
+    restart: always
+    container_name: hue
+    logging:
+      driver: "json-file"
+      options:
+          max-file: "5"
+          max-size: "10m"
+    depends_on:
+      - hive-server
+      - postgres
+    ports:
+      - "8888:8888"
+    networks:
+      - etl-net
+    volumes:
+      - ./mnt/hue/hue.ini:/usr/share/hue/desktop/conf/z-hue.ini
+    environment:
+      - SERVICE_PRECONDITION=10.5.0.106:10000 postgres:5432
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "hue", "8888" ]
+      timeout: 45s
+      interval: 10s
+      retries: 10
 
 ######################################################
 # SPARK SERVICE
 ######################################################
   spark-master:
+    build: ./docker/spark/spark-master
     restart: always
-    build: ./docker/spark
-    ports:
-      - "4040:8080"
-      - "8990:8990"
-      - "7077:7077"
     container_name: spark-master
-    expose:
-      - "4045-4099"
-    environment:
-      - SPARK_MODE=master
-      - SPARK_LOCAL_IP=spark-master
-      - SPARK_WORKLOAD=master
-      - SPARK_RPC_AUTHENTICATION_ENABLED=no
-      - SPARK_RPC_ENCRYPTION_ENABLED=no
-      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
-      - SPARK_SSL_ENABLED=no
-      - SPARK_USER=spark
-      - AWS_ACCESS_KEY_ID=minio
-      - AWS_SECRET_ACCESS_KEY=miniosecret
+    logging:
+      driver: "json-file"
+      options:
+          max-file: "5"
+          max-size: "10m"
+    ports:
+      - "4040:4040"
+      - "7077:7077"
     networks:
-      all-net:
+      - etl-net
     volumes:
-      - ./data/spark/work/:/opt/bitnami/spark/work/
-      - ./data/spark/logs/:/opt/bitnami/spark/history/
-      - ./data/spark/scripts/:/opt/bitnami/spark/scripts
-      - ./spark/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf
-      - type: bind
-        source: ./spark/log4j.properties
-        target: /opt/bitnami/spark/conf/log4j.properties
-    depends_on:
-      - minio-client
+      - ./mnt/spark/apps:/opt/spark-apps
+      - ./mnt/spark/data:/opt/spark-data
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "spark-master", "4040" ]
+      timeout: 45s
+      interval: 10s
+      retries: 10
 
   spark-worker-1:
-    <<: *sparkworker-common
+    build: ./docker/spark/spark-worker
     container_name: spark-worker-1
+    logging:
+      driver: "json-file"
+      options:
+          max-file: "5"
+          max-size: "10m"
+    depends_on:
+      - spark-master
+    ports:
+      - "8081:8081"
     networks:
-      all-net:
+      - etl-net
+    volumes:
+      - ./mnt/spark/apps:/opt/spark-apps
+      - ./mnt/spark/data:/opt/spark-data
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "spark-worker-1", "8081" ]
+      timeout: 45s
+      interval: 10s
+      retries: 10
+
 
   spark-worker-2:
-    <<: *sparkworker-common
+    build: ./docker/spark/spark-worker
     container_name: spark-worker-2
+    logging:
+      driver: "json-file"
+      options:
+          max-file: "5"
+          max-size: "10m"
+    depends_on:
+      - spark-master
+    ports:
+      - "8082:8081"
     networks:
-      all-net:
+      - etl-net
+    volumes:
+      - ./mnt/spark/apps:/opt/spark-apps
+      - ./mnt/spark/data:/opt/spark-data
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "spark-worker-2", "8081" ]
+      timeout: 45s
+      interval: 10s
+      retries: 10
+
 
   spark-worker-3:
-    <<: *sparkworker-common
+    build: ./docker/spark/spark-worker
     container_name: spark-worker-3
+    logging:
+      driver: "json-file"
+      options:
+          max-file: "5"
+          max-size: "10m"
+    depends_on:
+      - spark-master
+    ports:
+      - "8083:8081"
     networks:
-      all-net:
+      - etl-net
+    volumes:
+      - ./mnt/spark/apps:/opt/spark-apps
+      - ./mnt/spark/data:/opt/spark-data
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "spark-worker-3", "8081" ]
+      timeout: 45s
+      interval: 10s
+      retries: 10
+
 
   spark-worker-4:
-    <<: *sparkworker-common
+    build: ./docker/spark/spark-worker
     container_name: spark-worker-4
+    logging:
+      driver: "json-file"
+      options:
+          max-file: "5"
+          max-size: "10m"
+    depends_on:
+      - spark-master
+    ports:
+      - "8084:8081"
     networks:
-      all-net:
-
-  spark-livy:
+      - etl-net
+    volumes:
+      - ./mnt/spark/apps:/opt/spark-apps
+      - ./mnt/spark/data:/opt/spark-data
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "spark-worker-4", "8081" ]
+      timeout: 45s
+      interval: 10s
+      retries: 10
+    
+  livy:
     build: ./docker/livy
-    container_name: spark-livy
-
+    container_name: livy
+    restart: always
     command: ["sh", "-c", "/opt/bitnami/livy/bin/livy-server"]
+    logging:
+      driver: "json-file"
+      options:
+          max-file: "5"
+          max-size: "10m"
     volumes:
       - type: bind
-        source: ./livy/conf/
+        source: ./docker/livy/conf/
         target: /opt/bitnami/livy/conf/
       - type: bind
-        source: ./livy/target/
+        source: ./docker/livy/target/
         target: /target/
       - type: bind
-        source: ./livy/data/
+        source: ./docker/livy/data/
         target: /data/
     ports:
       - '8998:8998'
     networks:
-      all-net:
+      - etl-net
     depends_on:
       - spark-master
       - spark-worker-1
@@ -301,132 +510,35 @@ services:
       - spark-worker-3
       - spark-worker-4
 
+
 ######################################################
-# AIRFLOW SERVICE
+# AIRFLOW
 ######################################################
-  airflow-scheduler:
-    image: docker.io/bitnami/airflow-scheduler:2
-    # build: ./airflow/scheduler
-    container_name: airflow-scheduler
-    environment:
-      - AIRFLOW_FERNET_KEY=46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLbfzqDDho=
-      - AIRFLOW_SECRET_KEY=a25mQ1FHTUh3MnFRSk5KMEIyVVU2YmN0VGRyYTVXY08=
-      - AIRFLOW_DATABASE_HOST=postgres
-      - AIRFLOW_DATABASE_NAME=airflow
-      - AIRFLOW_DATABASE_USERNAME=airflow
-      - AIRFLOW_DATABASE_PASSWORD=airflow
-      - AIRFLOW_EXECUTOR=CeleryExecutor
-      - AIRFLOW_WEBSERVER_HOST=airflow
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@10.5.0.101:5432/airflow
-      - AIRFLOW__DATABASE__LOAD_DEFAULT_CONNECTIONS=False
-      - AIRFLOW__WEBSERVER__EXPOSE_CONFIG=True
-      - REDIS_HOST=redis
-      - AIRFLOW__LOGGING__REMOTE_LOGGING=True
-      - AIRFLOW__LOGGING__REMOTE_BASE_LOG_FOLDER=s3://airflow-logs
-      - AIRFLOW__LOGGING__REMOTE_LOG_CONN_ID=my_s3_conn
-      - AIRFLOW__LOGGING__ENCRYPT_S3_LOGS=False
-      - AIRFLOW__CORE__LOAD_EXAMPLES=False
-      - AIRFLOW__SECRETS__USE_CACHE=true
-
-    networks:
-      all-net:
-    volumes:
-      - ./data/airflow/dags:/opt/bitnami/airflow/dags
-      - ./data/airflow//logs:/opt/bitnami/airflow/logs
-      - ./data/airflow//plugins:/opt/bitnami/airflow/plugins
-      - /var/run/docker.sock:/var/run/docker.sock
-    depends_on:
-      - openldap
-      - minio
-
-  airflow-worker:
-    image: docker.io/bitnami/airflow-worker:2
-    # build: ./airflow/worker
-    container_name: airflow-worker
-    environment:
-      - AIRFLOW_FERNET_KEY=46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLbfzqDDho=
-      - AIRFLOW_SECRET_KEY=a25mQ1FHTUh3MnFRSk5KMEIyVVU2YmN0VGRyYTVXY08=
-      - AIRFLOW_EXECUTOR=CeleryExecutor
-      - AIRFLOW_DATABASE_HOST=postgres
-      - AIRFLOW_DATABASE_NAME=airflow
-      - AIRFLOW_DATABASE_USERNAME=airflow
-      - AIRFLOW_DATABASE_PASSWORD=airflow
-      - AIRFLOW_WEBSERVER_HOST=airflow
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@10.5.0.101:5432/airflow
-      - AIRFLOW__DATABASE__LOAD_DEFAULT_CONNECTIONS=False
-      - AIRFLOW__WEBSERVER__EXPOSE_CONFIG=True
-      - REDIS_HOST=redis
-      - AIRFLOW__LOGGING__REMOTE_LOGGING=True
-      - AIRFLOW__LOGGING__REMOTE_BASE_LOG_FOLDER=s3://airflow-logs
-      - AIRFLOW__LOGGING__REMOTE_LOG_CONN_ID=my_s3_conn
-      - AIRFLOW__LOGGING__ENCRYPT_S3_LOGS=False
-      - AIRFLOW__CORE__LOAD_EXAMPLES=False
-      - AIRFLOW__SECRETS__USE_CACHE=true
-
-    networks:
-      all-net:
-    volumes:
-      - ./data/airflow/dags:/opt/bitnami/airflow/dags
-      - ./data/airflow/logs:/opt/bitnami/airflow/logs
-      - ./data/airflow/plugins:/opt/bitnami/airflow/plugins
-      - /var/run/docker.sock:/var/run/docker.sock
-    depends_on:
-      - openldap
-      - minio
 
   airflow:
-    image: docker.io/bitnami/airflow:2
-    # build: ./airflow/main
+    build: ./docker/airflow
+    restart: always
     container_name: airflow
-    environment:
-      # - AIRFLOW_LDAP_ENABLE=yes
-      # - AIRFLOW_LDAP_URI=ldap://10.5.0.103:389
-      # - AIRFLOW_LDAP_SEARCH=dc=example,dc=org
-      # - AIRFLOW_LDAP_BIND_USER=cn=admin,dc=example,dc=org
-      # - AIRFLOW_LDAP_BIND_PASSWORD=admin
-      # - AIRFLOW_LDAP_UID_FIELD=uid
-      # - AIRFLOW_LDAP_USE_TLS=False
-      # - AIRFLOW_LDAP_ROLES_MAPPING="{ 'cn=All,ou=Groups,dc=example,dc=org':['User'], 'cn=Admin,ou=Groups,dc=example,dc=org':['Admin'], }"
-      # - AIRFLOW_LDAP_USER_REGISTRATION_ROLE=Admin
-      - AIRFLOW_FERNET_KEY=46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLbfzqDDho=
-      - AIRFLOW_SECRET_KEY=a25mQ1FHTUh3MnFRSk5KMEIyVVU2YmN0VGRyYTVXY08=
-      - AIRFLOW_DATABASE_HOST=postgres
-      - AIRFLOW_DATABASE_NAME=airflow
-      - AIRFLOW_DATABASE_USERNAME=airflow
-      - AIRFLOW_DATABASE_PASSWORD=airflow
-      - AIRFLOW_PASSWORD=airflow
-      - AIRFLOW_USERNAME=airflow
-      - AIRFLOW_EMAIL=user@example.com
-      - AIRFLOW_EXECUTOR=CeleryExecutor
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@10.5.0.101:5432/airflow
-      - AIRFLOW__DATABASE__LOAD_DEFAULT_CONNECTIONS=False
-      - AIRFLOW__WEBSERVER__EXPOSE_CONFIG=True
-      - REDIS_HOST=redis
-      - AIRFLOW__LOGGING__REMOTE_LOGGING=True
-      - AIRFLOW__LOGGING__REMOTE_BASE_LOG_FOLDER=s3://airflow-logs
-      - AIRFLOW__LOGGING__REMOTE_LOG_CONN_ID=my_s3_conn
-      - AIRFLOW__LOGGING__ENCRYPT_S3_LOGS=False
-      - AIRFLOW__CORE__LOAD_EXAMPLES=False
-      - AIRFLOW__SECRETS__USE_CACHE=true
-    networks:
-      all-net:
-    ports:
-      - '8080:8080'
     volumes:
-      - ./data/airflow/dags:/opt/bitnami/airflow/dags
-      - ./data/airflow//logs:/opt/bitnami/airflow/logs
-      - ./data/airflow//plugins:/opt/bitnami/airflow/plugins
-      - /var/run/docker.sock:/var/run/docker.sock
-    depends_on:
-      - openldap
-      - minio
-
+      - ./mnt/airflow/airflow.cfg:/opt/airflow/airflow.cfg
+      - ./mnt/airflow/dags:/opt/airflow/dags
+      - ./mnt/airflow/logs:/opt/airflow/logs
+    ports:
+      - 8080:8080
+    networks:
+      - etl-net
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "airflow", "8080" ]
+      timeout: 45s
+      interval: 10s
+      retries: 10
 
 ######################################################
 # NETWORKS
 ######################################################
 networks:
-  all-net:
+  etl-net:
+    name: etlnet
     ipam:
       config:
         - subnet: 10.5.0.0/16
@@ -448,8 +560,6 @@ volumes:
   openldap_data:
     driver: local
   redis_data:
-    driver: local
-  spark_backup_data:
     driver: local
   postgres_data:
     driver: local

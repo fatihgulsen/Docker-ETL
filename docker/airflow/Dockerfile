@@ -3,9 +3,8 @@ FROM spark-base:latest
 LABEL maintainer="FatihGulsen"
 
 # Arguments that can be set with docker build
-ARG AIRFLOW_VERSION=2.1.5
+ARG AIRFLOW_VERSION=2.6.3
 ARG AIRFLOW_HOME=/opt/airflow
-
 # Export the environment variable AIRFLOW_HOME where airflow will be installed
 ENV AIRFLOW_HOME=${AIRFLOW_HOME}
 
@@ -35,18 +34,27 @@ RUN apt-get update -y && \
     netcat \
     && apt-get autoremove -yqq --purge && apt-get clean
 
+RUN apt update && apt upgrade -y
+RUN add-apt-repository -r ppa:deadsnakes/ppa &&\
+    apt update
+
 # Upgrade pip
 # Create airflow user 
 # Install apache airflow with subpackages
-RUN pip install --upgrade "pip==20.2.4" && \
-    useradd -ms /bin/bash -d ${AIRFLOW_HOME} airflow && \
-    pip install apache-airflow==${AIRFLOW_VERSION} --constraint https://raw.githubusercontent.com/apache/airflow/constraints-2.1.4/constraints-3.7.txt && \
-    pip install apache-airflow-providers-apache-hdfs==2.1.0 && \
-    pip install apache-airflow-providers-apache-hive==2.0.2 && \
-    pip install apache-airflow-providers-apache-spark==2.0.1 && \
-    pip install apache-airflow-providers-slack==4.0.1 && \
-    pip install apache-airflow-providers-http==2.0.1 && \
-    pip install apache-airflow-backport-providers-microsoft-mssql
+RUN pip install --upgrade "pip>=20.2.4" && \
+    useradd -ms /bin/bash -d ${AIRFLOW_HOME} airflow
+
+RUN pip install apache-airflow==${AIRFLOW_VERSION} --constraint https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-$(python3 --version | cut -d " " -f 2 | cut -d "." -f 1-2).txt
+    # pip install apache-airflow-providers-apache-hdfs==2.1.0 && \
+    # pip install apache-airflow-providers-apache-hive==2.0.2 && \
+    # pip install apache-airflow-providers-apache-spark==2.0.1 && \
+    # pip install apache-airflow-providers-slack==4.0.1 && \
+    # pip install apache-airflow-providers-http==2.0.1 && \
+    # pip install apache-airflow-backport-providers-microsoft-mssql
+
+COPY ./requirements.txt ./requirements.txt
+RUN pip install -r requirements.txt
+
 # Copy the airflow.cfg file (config)
 #COPY ./config/airflow.cfg ${AIRFLOW_HOME}/airflow.cfg
 
@@ -70,5 +78,3 @@ EXPOSE 8080
 
 # Execute start-airflow.sh
 CMD [ "./start-airflow.sh" ]
-
-    

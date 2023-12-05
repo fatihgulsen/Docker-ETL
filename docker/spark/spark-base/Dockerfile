@@ -2,7 +2,7 @@ FROM hive-base:latest
 LABEL maintainer="FatihGulsen"
 
 # Defining useful environment variables
-ENV SPARK_VERSION=3.5.0
+ENV SPARK_VERSION=3.4.2
 ENV HADOOP_VERSION=3.3.6
 ENV SCALA_VERSION=2.12.18
 ENV SCALA_HOME=/usr/share/scala
@@ -30,6 +30,10 @@ RUN apt-get update -yqq && \
     jq \
     wget \
     software-properties-common
+RUN add-apt-repository -r ppa:deadsnakes/nightly
+RUN add-apt-repository -r ppa:deadsnakes/ppa
+RUN apt-get update && \
+    apt update
 
 # Installing Scala
 WORKDIR /tmp
@@ -51,11 +55,12 @@ RUN export PATH="/usr/local/sbt/bin:$PATH" && \
     sbt sbtVersion
 
 # Adding dependencies for PySpark
-RUN apt-get install -y curl python3.7 python3.7-dev python3.7-distutils
+RUN apt-get install -y curl python3.7 
+RUN apt-get install -y python3.7-dev python3.7-distutils
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.7 1
 RUN update-alternatives --set python /usr/bin/python3.7
 RUN curl https://bootstrap.pypa.io/get-pip.py | python3
-RUN pip install --upgrade "pip==20.2.4"
+RUN pip install --upgrade "pip>=20.2.4"
 RUN apt-get install -yqq python3-numpy python3-matplotlib python3-scipy python3-pandas python3-simpy
 
 #RUN apt-get install -yqq python3 python3-numpy python3-matplotlib python3-scipy python3-pandas python3-simpy && \
@@ -65,14 +70,14 @@ RUN apt-get install -yqq python3-numpy python3-matplotlib python3-scipy python3-
 # Installing Spark
 WORKDIR ${SPARK_HOME}
 
-RUN wget --no-verbose https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz && \
-    tar zxf spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz && \ 
-    mv spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}/* . && \
-    rm -rf spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz && \
-    rm -rf spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}
+RUN wget --no-verbose https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop3.tgz && \
+    tar zxf spark-${SPARK_VERSION}-bin-hadoop3.tgz && \ 
+    mv spark-${SPARK_VERSION}-bin-hadoop3/* . && \
+    rm -rf spark-${SPARK_VERSION}-bin-hadoop3.tgz && \
+    rm -rf spark-${SPARK_VERSION}-bin-hadoop3
 
 # Use Spark with Hive
-RUN cp ${HIVE_HOME}/conf/hive-site.xml $SPARK_HOME/conf
+RUN cp ${HIVE_HOME}/conf/hive-site.xml ${SPARK_HOME}/conf
 
 RUN apt-get autoremove -yqq --purge && \
     apt-get clean && \
@@ -80,7 +85,7 @@ RUN apt-get autoremove -yqq --purge && \
 
 RUN curl -o hadoop-aws-3.3.6.jar https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.3.6/hadoop-aws-3.3.6.jar && \
     curl -o aws-java-sdk-bundle-1.12.99.jar https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.99/aws-java-sdk-bundle-1.12.99.jar && \
-    curl -o postgresql-42.3.5.jar https://jdbc.postgresql.org/download/postgresql-42.3.5.jar && \
+    curl -o postgresql-42.3.5.jar https://jdbc.postgresql.org/download/postgresql-42.2.14.jar && \
     curl -o mssql-jdbc-12.4.2.jre11.jar https://repo1.maven.org/maven2/com/microsoft/sqlserver/mssql-jdbc/12.4.2.jre11/mssql-jdbc-12.4.2.jre11.jar && \
     curl -o mssql-jdbc-12.4.2.jre8.jar https://repo1.maven.org/maven2/com/microsoft/sqlserver/mssql-jdbc/12.4.2.jre8/mssql-jdbc-12.4.2.jre8.jar && \
     curl -o delta-core_2.12-2.4.0.jar https://repo1.maven.org/maven2/io/delta/delta-core_2.12/2.4.0/delta-core_2.12-2.4.0.jar && \
@@ -94,7 +99,7 @@ COPY ./entrypoint.sh .
 COPY ./spark-defaults.conf ${SPARK_HOME}/conf/spark-defaults.conf
 
 COPY requirements.txt requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 RUN chmod +x entrypoint.sh
 
