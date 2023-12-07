@@ -11,11 +11,9 @@ RUN apt-get  install -y \
     libgnutls30 \
     netcat
 
-RUN pip3 install --upgrade cython && \
-    pip3 install pyodbc && \
-    pip3 install pymssql && \
-    pip install pyodbc && \
-    pip install pymssql
+
+RUN ./build/env/bin/pip install pyodbc 
+RUN ./build/env/bin/pip install pymssql 
 
 RUN mv /etc/apt/sources.list.d/nodesource.list.disabled /etc/apt/sources.list.d/nodesource.list
 
