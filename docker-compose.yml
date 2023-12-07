@@ -63,7 +63,7 @@ services:
       - ./mnt/mssql/backup/:/var/opt/mssql/backup
     environment:
       - ACCEPT_EULA=Y
-      - MSSQL_SA_PASSWORD="TradeAtlas*"
+      - MSSQL_SA_PASSWORD=TradeAtlas*
 
   postgres:
     build: './docker/postgres'
@@ -248,6 +248,8 @@ services:
           max-size: "10m"
     depends_on:
       - namenode
+    ports:
+      - "9864:9864"
     volumes:
       - ./mnt/hadoop/datanode:/hadoop/dfs/data
     networks:
@@ -256,6 +258,52 @@ services:
       - SERVICE_PRECONDITION=namenode:9870
     healthcheck:
       test: [ "CMD", "nc", "-z", "datanode", "9864" ]
+      timeout: 45s
+      interval: 10s
+      retries: 10
+
+  historyserver:
+    build: ./docker/hadoop/hadoop-historyserver
+    restart: always
+    container_name: historyserver
+    logging:
+      driver: "json-file"
+      options:
+          max-file: "5"
+          max-size: "10m"
+    depends_on:
+      - namenode
+    ports:
+      - "8188:8188"
+    volumes:
+      - ./mnt/hadoop/historyserver:/hadoop/dfs/data
+    networks:
+      - etl-net
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "historyserver", "8188" ]
+      timeout: 45s
+      interval: 10s
+      retries: 10
+
+  resourcemanager:
+    build: ./docker/hadoop/hadoop-resourcemanager
+    restart: always
+    container_name: resourcemanager
+    logging:
+      driver: "json-file"
+      options:
+          max-file: "5"
+          max-size: "10m"
+    depends_on:
+      - namenode
+    ports:
+      - "8088:8088"
+    volumes:
+      - ./mnt/hadoop/resourcemanager:/hadoop/dfs/data
+    networks:
+      - etl-net
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "resourcemanager", "8088" ]
       timeout: 45s
       interval: 10s
       retries: 10
@@ -523,6 +571,10 @@ services:
       - ./mnt/airflow/airflow.cfg:/opt/airflow/airflow.cfg
       - ./mnt/airflow/dags:/opt/airflow/dags
       - ./mnt/airflow/logs:/opt/airflow/logs
+    depends_on:
+      - spark-master
+      - resourcemanager
+      - hive-server
     ports:
       - 8080:8080
     networks:

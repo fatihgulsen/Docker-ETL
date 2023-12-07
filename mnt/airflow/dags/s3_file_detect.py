@@ -1,10 +1,11 @@
 from airflow import DAG
 from airflow.providers.amazon.aws.sensors.s3 import S3KeySensor
 from airflow.providers.postgres.operators.postgres import PostgresOperator
+from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator 
+from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator
 from airflow.decorators import task
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.models import XCom
 from airflow.utils.db import provide_session
 from airflow.models import Variable
@@ -25,7 +26,7 @@ def _get_events_data(ti):
 
 
 def get_active_files():
-    request = "SELECT * FROM public.events_destination where is_proc is false;"
+    request = "SELECT * FROM public.events where is_proc is false;"
     pg_hook = PostgresHook(postgres_conn_id="postgres_default",schema='minio')
     connection=pg_hook.get_conn()
     cursor = connection.cursor()
@@ -83,5 +84,14 @@ s3_file_test = S3KeySensor(
     aws_conn_id='aws_default',
     dag=dag)
 
+processing = SparkSubmitOperator(
+    task_id="processing",
+    application="/opt/airflow/dags/scripts/arg_etl.py",
+    conn_id="spark_conn",
+    verbose=False,
+    application_args=['--file', Variable.get('file_name')],
+    dag=dag
+)
 
-get_events >> get_events_data >> delete_xcom >> s3_file_test
+
+get_events >> get_events_data >> delete_xcom >> s3_file_test >> processing

@@ -59,8 +59,9 @@ RUN pip install -r requirements.txt
 #COPY ./config/airflow.cfg ${AIRFLOW_HOME}/airflow.cfg
 
 # Set the owner of the files in AIRFLOW_HOME to the user airflow
-RUN chown -R airflow: ${AIRFLOW_HOME}
 
+RUN chown -R airflow: ${AIRFLOW_HOME}
+# ENV JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64/bin/java
 # Copy the entrypoint.sh from host to container (at path AIRFLOW_HOME)
 COPY ./start-airflow.sh ./start-airflow.sh
 

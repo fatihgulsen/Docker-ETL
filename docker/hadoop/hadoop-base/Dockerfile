@@ -1,12 +1,13 @@
 FROM openjdk:8-jdk-slim-buster
 LABEL maintainer="FatihGulsen"
 
-ENV HADOOP_VERSION=3.3.6
+ENV HADOOP_VERSION=3.3.4
 ENV HADOOP_HOME=/opt/hadoop
 ENV HADOOP_CONF_DIR=/etc/hadoop
 ENV USER=root
 ENV PATH ${HADOOP_HOME}/bin/:$PATH
-
+ENV TZ=Europe/Istanbul
+RUN date
 RUN apt-get update -yqq && \
     apt-get upgrade -yqq && \
     apt-get install -yqq --no-install-recommends \
