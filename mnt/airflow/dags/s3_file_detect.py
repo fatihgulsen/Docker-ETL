@@ -11,18 +11,17 @@ from airflow.utils.db import provide_session
 from airflow.models import Variable
 import urllib.parse
 from datetime import datetime, timedelta
+import os 
 
 yday = datetime.combine(datetime.today() - timedelta(1),
                                   datetime.min.time())
 
 def _get_events_data(ti):
     data = ti.xcom_pull(task_ids=['get_events'])
-    # print(data)
-    bucket_name = data[0][0][1]['Records'][0]['s3']['bucket']['name']
-    file_name = urllib.parse.unquote(data[0][0][1]['Records'][0]['s3']['object']['key'])
-    Variable.set(key="bucket_name", value=bucket_name)
+    print(data)
+    file_name = data[0]
     Variable.set(key="file_name", value=file_name)
-    # print(bucket_name,file_name)
+    print(file_name)
 
 
 def get_active_files():
@@ -31,24 +30,32 @@ def get_active_files():
     connection=pg_hook.get_conn()
     cursor = connection.cursor()
     cursor.execute(request)
-    sources = cursor.fetchall()
+    sources = cursor.fetchone()
     for source in sources:
         print(source)
     if len(sources)>0:
-        return sources
+        return sources[0]
     else:
         raise 'No new data'
         
+def set_file_status():
+    file_name = Variable.get('file_name')
+    request = f"BEGIN;update public.events set is_proc=true where is_proc is false and \"key\" like \'{file_name}\';END;"
+    print(request)
+    pg_hook = PostgresHook(postgres_conn_id="postgres_default",schema='minio')
+    connection=pg_hook.get_conn()
+    cursor = connection.cursor()
+    cursor.execute(request)
 
 default_args = {
     'owner': 'airflow',
     'depends_on_past': False,
     'start_date': yday,
-    'retries': 60*24,
+    'retries': 60,
     'retry_delay': timedelta(minutes=1)
 }
 
-dag = DAG('s3_file_sensor', default_args=default_args, schedule_interval='@daily',
+dag = DAG('s3_file_sensor', default_args=default_args, schedule_interval='@hourly',
     max_active_runs=1,catchup=False)
 
 get_events = PythonOperator(
@@ -76,14 +83,6 @@ delete_xcom = PythonOperator(
     dag=dag
 )
 
-s3_file_test = S3KeySensor(
-    task_id='s3_file_test',
-    soft_fail=True,
-    bucket_key=Variable.get('file_name'),
-    bucket_name=Variable.get('bucket_name'),
-    aws_conn_id='aws_default',
-    dag=dag)
-
 processing = SparkSubmitOperator(
     task_id="processing",
     application="/opt/airflow/dags/scripts/arg_etl.py",
@@ -93,5 +92,10 @@ processing = SparkSubmitOperator(
     dag=dag
 )
 
+set_file_proc = PythonOperator(
+        task_id="set_file_status",
+        python_callable=set_file_status,
+        dag=dag
+    )
 
-get_events >> get_events_data >> delete_xcom >> s3_file_test >> processing
+get_events >> get_events_data >> delete_xcom >>  processing >> set_file_proc
